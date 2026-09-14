@@ -18,6 +18,7 @@
   --danger: #d44c47;
   --shadow: 0 4px 18px rgba(15, 15, 15, 0.08);
   --canvas-icon-filter: invert(1);
+  --language-icon-filter: none;
 }
 
 :root[data-theme="dark"] {
@@ -38,6 +39,7 @@
   --danger: #ff7369;
   --shadow: 0 4px 18px rgba(0, 0, 0, 0.28);
   --canvas-icon-filter: none;
+  --language-icon-filter: invert(1);
 }
 
 * {
@@ -102,6 +104,12 @@ a:focus-visible {
   padding: 0 0 14px;
 }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 h1 {
   margin: 0;
   font-size: 1.25rem;
@@ -125,6 +133,68 @@ h1 {
 .theme-button:hover {
   background: var(--surface-hover);
   color: var(--text);
+}
+
+.language-menu {
+  position: relative;
+}
+
+.language-menu summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.78rem;
+  list-style: none;
+}
+
+.language-menu summary::-webkit-details-marker {
+  display: none;
+}
+
+.language-menu summary img {
+  width: 16px;
+  height: 16px;
+  filter: var(--language-icon-filter);
+}
+
+.language-menu summary:hover,
+.language-menu[open] summary {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.language-menu-options {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 4;
+  display: grid;
+  min-width: 116px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.language-menu-options button {
+  padding: 7px 9px;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.78rem;
+  text-align: left;
+}
+
+.language-menu-options button:hover,
+.language-menu-options button[aria-current="true"] {
+  background: var(--surface-hover);
 }
 
 .controls {

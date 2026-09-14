@@ -14,6 +14,7 @@ import {
   createNameSuggestions,
   slugifySuggestedName,
 } from "./name-suggestions.js";
+import { DEFAULT_LANGUAGE, translate } from "./translations.js";
 import "./styles.css";
 
 const STYLE_URL = "mapbox://styles/veave/clxnace1t003701r00j380e5e";
@@ -37,6 +38,8 @@ const elements = {
   mapContainer: document.querySelector("#map"),
   themeButton: document.querySelector("#themeButton"),
   themeButtonLabel: document.querySelector(".theme-button-label"),
+  languageMenu: document.querySelector(".language-menu"),
+  languageButtons: document.querySelectorAll("[data-language]"),
   expandCanvasButton: document.querySelector("#expandCanvasButton"),
   contractCanvasButton: document.querySelector("#contractCanvasButton"),
   nameToggle: document.querySelector("#nameToggle"),
@@ -52,6 +55,7 @@ const state = {
   bearing: 0,
   canvasSize: DEFAULT_CANVAS_SIZE,
   outputSize: 4000,
+  language: DEFAULT_LANGUAGE,
 };
 
 let map;
@@ -61,9 +65,62 @@ let nameSearchController;
 let nameSearchTimer;
 let hasCustomName = false;
 
+function t(key, values) {
+  return translate(state.language, key, values);
+}
+
+function translateDocument() {
+  document.documentElement.lang = state.language;
+  document.title = t("documentTitle");
+
+  for (const element of document.querySelectorAll("[data-i18n]")) {
+    element.textContent = t(element.dataset.i18n);
+  }
+  for (const element of document.querySelectorAll("[data-i18n-aria-label]")) {
+    element.setAttribute("aria-label", t(element.dataset.i18nAriaLabel));
+  }
+  for (const element of document.querySelectorAll("[data-i18n-title]")) {
+    element.title = t(element.dataset.i18nTitle);
+  }
+
+  elements.themeButton.setAttribute("aria-label", t("switchTheme"));
+  elements.languageMenu.querySelector("summary").setAttribute("aria-label", t("languageMenuLabel"));
+  elements.languageMenu.querySelector("summary").title = t("languageMenuLabel");
+  elements.languageMenu.querySelector("[role=group]").setAttribute("aria-label", t("languageMenuLabel"));
+  for (const button of elements.languageButtons) {
+    button.textContent = t(button.dataset.language === "ru" ? "languageOptionRussian" : "languageOptionEnglish");
+    button.setAttribute("aria-current", String(button.dataset.language === state.language));
+  }
+  for (const group of elements.nameSelect.querySelectorAll("[data-suggestion-group]")) {
+    group.label = t(`group${group.dataset.suggestionGroup}`);
+  }
+  const suggestionMessage = elements.nameSelect.querySelector("[data-i18n-suggestion-message]");
+  if (suggestionMessage) {
+    suggestionMessage.textContent = t(suggestionMessage.dataset.i18nSuggestionMessage);
+  }
+  applyTheme(document.documentElement.dataset.theme || "light");
+  setCanvasSize(state.canvasSize);
+  setNameEditMode(hasCustomName);
+  setButtonsBusy(false, false);
+}
+
+function applyLanguage(language) {
+  if (language !== "en" && language !== "ru") return;
+  state.language = language;
+  translateDocument();
+  elements.languageMenu.open = false;
+
+  try {
+    localStorage.setItem("mapbox-screenshotter-language", language);
+  } catch {
+    // The selected language still applies for the current page.
+  }
+
+}
+
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
-  elements.themeButtonLabel.textContent = theme === "dark" ? "Light" : "Dark";
+  elements.themeButtonLabel.textContent = theme === "dark" ? t("themeLight") : t("themeDark");
   elements.themeButton.setAttribute("aria-pressed", String(theme === "dark"));
 }
 
@@ -154,12 +211,14 @@ function setCanvasSize(size) {
   elements.contractCanvasButton.disabled = state.canvasSize <= MIN_CANVAS_SIZE;
   elements.expandCanvasButton.setAttribute(
     "aria-label",
-    `Expand canvas to show more area. Current size ${state.canvasSize} pixels.`,
+    t("expandCanvas", { size: state.canvasSize }),
   );
   elements.contractCanvasButton.setAttribute(
     "aria-label",
-    `Contract canvas to show less area. Current size ${state.canvasSize} pixels.`,
+    t("contractCanvas", { size: state.canvasSize }),
   );
+  elements.expandCanvasButton.title = t("expandCanvasTitle");
+  elements.contractCanvasButton.title = t("contractCanvasTitle");
   updatePreviewScale();
   syncDerivedExportState();
 }
@@ -203,7 +262,7 @@ function searchUrl(path, parameters) {
 async function fetchJson(url, signal) {
   const response = await fetch(url, { signal });
   if (!response.ok) {
-    throw new Error(`Mapbox name search failed with status ${response.status}.`);
+    throw new Error(t("mapboxSearchFailed", { status: response.status }));
   }
   return response.json();
 }
@@ -213,7 +272,7 @@ function renderNameSuggestions(suggestions, selectedName = "", preferClosest = f
   elements.nameSelect.replaceChildren();
 
   if (suggestions.length === 0) {
-    elements.nameSelect.add(new Option("No nearby names", ""));
+    setNameSuggestionMessage("noNearbyNames");
     syncNameControls();
     return;
   }
@@ -222,7 +281,8 @@ function renderNameSuggestions(suggestions, selectedName = "", preferClosest = f
   for (const suggestion of suggestions) {
     if (!groups.has(suggestion.group)) {
       const optionGroup = document.createElement("optgroup");
-      optionGroup.label = suggestion.group;
+      optionGroup.dataset.suggestionGroup = suggestion.group;
+      optionGroup.label = t(`group${suggestion.group}`);
       groups.set(suggestion.group, optionGroup);
       elements.nameSelect.appendChild(optionGroup);
     }
@@ -232,6 +292,12 @@ function renderNameSuggestions(suggestions, selectedName = "", preferClosest = f
   const hasPreviousSelection = suggestions.some(({ name }) => name === selectedName);
   if (!preferClosest && hasPreviousSelection) elements.nameSelect.value = selectedName;
   syncNameControls();
+}
+
+function setNameSuggestionMessage(key) {
+  const option = new Option(t(key), "");
+  option.dataset.i18nSuggestionMessage = key;
+  elements.nameSelect.replaceChildren(option);
 }
 
 function syncNameControls() {
@@ -247,7 +313,7 @@ function setNameEditMode(isCustom) {
   elements.nameSelect.hidden = isCustom;
   elements.nameInput.hidden = !isCustom;
   elements.nameEditButton.dataset.state = isCustom ? "reset" : "edit";
-  const label = isCustom ? "Reset to suggested name" : "Edit suggested name";
+  const label = isCustom ? t("resetSuggestedName") : t("editSuggestedName");
   elements.nameEditButton.setAttribute("aria-label", label);
   elements.nameEditButton.title = label;
   syncNameControls();
@@ -281,7 +347,7 @@ async function refreshNameSuggestions({ preferClosest = false } = {}) {
   elements.nameSelect.disabled = true;
   elements.nameEditButton.disabled = !elements.nameToggle.checked || !selectedName;
   if (!selectedName) {
-    elements.nameSelect.replaceChildren(new Option("Finding nearby names...", ""));
+    setNameSuggestionMessage("findingNearbyNames");
   }
   elements.nameSelectLabel.dataset.loading = "true";
 
@@ -323,7 +389,7 @@ async function refreshNameSuggestions({ preferClosest = false } = {}) {
     if (error.name === "AbortError") return;
     console.error(error);
     elements.nameSelectLabel.dataset.loading = "false";
-    elements.nameSelect.replaceChildren(new Option("Names unavailable", ""));
+    setNameSuggestionMessage("namesUnavailable");
     syncNameControls();
   }
 }
@@ -424,8 +490,8 @@ function copySupported() {
 function setButtonsBusy(isBusy, copyMode = false) {
   elements.screenshotButton.disabled = isBusy;
   elements.copyButton.disabled = isBusy || !copySupported();
-  const screenshotLabel = isBusy && !copyMode ? "Rendering…" : "Download PNG";
-  const copyLabel = isBusy && copyMode ? "Copying…" : "Copy PNG";
+  const screenshotLabel = isBusy && !copyMode ? t("rendering") : t("downloadPng");
+  const copyLabel = isBusy && copyMode ? t("copying") : t("copyPng");
   elements.screenshotButton.setAttribute("aria-label", screenshotLabel);
   elements.screenshotButton.title = screenshotLabel;
   elements.copyButton.setAttribute("aria-label", copyLabel);
@@ -437,8 +503,8 @@ function setButtonsBusy(isBusy, copyMode = false) {
 function showButtonSuccess(button, label) {
   button.disabled = false;
   button.dataset.state = "success";
-  button.setAttribute("aria-label", `${label} complete`);
-  button.title = `${label} complete`;
+  button.setAttribute("aria-label", `${label} ${t("complete")}`);
+  button.title = `${label} ${t("complete")}`;
   window.setTimeout(() => {
     button.dataset.state = "idle";
     button.setAttribute("aria-label", label);
@@ -449,7 +515,7 @@ function showButtonSuccess(button, label) {
 function waitForIdle(exportMap) {
   return new Promise((resolve, reject) => {
     const timeout = window.setTimeout(() => {
-      reject(new Error("The export timed out while loading map tiles."));
+      reject(new Error(t("exportTimedOut")));
     }, EXPORT_TIMEOUT_MS);
 
     exportMap.once("idle", () => {
@@ -470,7 +536,7 @@ function waitForStyle(exportMap) {
 function getSpriteSheetUrls() {
   const match = STYLE_URL.match(/^mapbox:\/\/styles\/([^/]+)\/([^/?]+)/);
   if (!match) {
-    throw new Error("The map style URL cannot be used to load its pattern sprites.");
+    throw new Error(t("styleSpritesUnavailable"));
   }
 
   const [, owner, styleId] = match;
@@ -492,7 +558,7 @@ async function loadSpriteSheet() {
       ]);
 
       if (!metadataResponse.ok || !imageResponse.ok) {
-        throw new Error("Mapbox did not return the style's pattern sprites.");
+        throw new Error(t("patternSpritesUnavailable"));
       }
 
       const [metadata, imageBlob] = await Promise.all([
@@ -517,7 +583,7 @@ function cropSpriteImage(spriteSheet, metadata) {
   const context = canvas.getContext("2d");
 
   if (!context) {
-    throw new Error("The browser could not prepare a map pattern for export.");
+    throw new Error(t("patternPreparationFailed"));
   }
 
   context.drawImage(
@@ -568,7 +634,7 @@ function canvasToBlob(canvas) {
       if (blob) {
         resolve(blob);
       } else {
-        reject(new Error("The browser could not encode the rendered map as PNG."));
+        reject(new Error(t("pngEncodingFailed")));
       }
     }, "image/png");
   });
@@ -578,7 +644,7 @@ async function renderExportBlob() {
   const plan = getExportPlan();
 
   if (state.zoom + plan.zoomDelta > 24) {
-    throw new RangeError("This output resolution exceeds Mapbox's maximum zoom. Reduce the map zoom or output size.");
+    throw new RangeError(t("outputZoomExceeded"));
   }
 
   const container = document.createElement("div");
@@ -613,7 +679,7 @@ async function renderExportBlob() {
 
     const sourceCanvas = exportMap.getCanvas();
     if (!sourceCanvas.width || !sourceCanvas.height) {
-      throw new Error("The export renderer produced an empty canvas.");
+      throw new Error(t("emptyExport"));
     }
 
     if (sourceCanvas.width === plan.outputSize && sourceCanvas.height === plan.outputSize) {
@@ -626,7 +692,7 @@ async function renderExportBlob() {
     const context = outputCanvas.getContext("2d");
 
     if (!context) {
-      throw new Error("The browser could not create the PNG output canvas.");
+      throw new Error(t("outputCanvasFailed"));
     }
 
     context.drawImage(sourceCanvas, 0, 0, plan.outputSize, plan.outputSize);
@@ -639,7 +705,7 @@ async function renderExportBlob() {
 
 async function downloadPng() {
   setButtonsBusy(true, false);
-  setStatus("Rendering the high-resolution map…");
+  setStatus(t("rendering"));
   let completed = false;
 
   try {
@@ -664,13 +730,13 @@ async function downloadPng() {
     throw error;
   } finally {
     setButtonsBusy(false, false);
-    if (completed) showButtonSuccess(elements.screenshotButton, "Download PNG");
+    if (completed) showButtonSuccess(elements.screenshotButton, t("downloadPng"));
   }
 }
 
 async function copyPng() {
   setButtonsBusy(true, true);
-  setStatus("Rendering the high-resolution map…");
+  setStatus(t("rendering"));
   let completed = false;
 
   try {
@@ -683,13 +749,22 @@ async function copyPng() {
     throw error;
   } finally {
     setButtonsBusy(false, false);
-    if (completed) showButtonSuccess(elements.copyButton, "Copy PNG");
+    if (completed) showButtonSuccess(elements.copyButton, t("copyPng"));
   }
 }
 
+try {
+  state.language = localStorage.getItem("mapbox-screenshotter-language") === "ru" ? "ru" : DEFAULT_LANGUAGE;
+} catch {
+  // English remains the default when storage is unavailable.
+}
+
 mapboxgl.accessToken = ACCESS_TOKEN;
-applyTheme(document.documentElement.dataset.theme || "light");
-setCanvasSize(state.canvasSize);
+translateDocument();
+
+for (const button of elements.languageButtons) {
+  button.addEventListener("click", () => applyLanguage(button.dataset.language));
+}
 
 map = new mapboxgl.Map({
   container: elements.mapContainer,
@@ -803,7 +878,7 @@ elements.nameInput.addEventListener("keydown", (event) => {
 
 if (!copySupported()) {
   elements.copyButton.disabled = true;
-  elements.copyButton.title = "Clipboard PNG copy is not supported in this browser.";
+  elements.copyButton.title = t("clipboardUnsupported");
 }
 
 window.addEventListener("resize", () => {

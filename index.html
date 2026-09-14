@@ -19,36 +19,47 @@
     <div class="app-shell">
       <div class="control-panel">
         <header class="panel-header">
-          <h1>map screenshotter</h1>
-          <button type="button" id="themeButton" class="theme-button" aria-label="Switch color theme">
-            <span class="theme-button-label">Dark</span>
-          </button>
+          <h1 data-i18n="appTitle">map screenshotter</h1>
+          <div class="header-actions">
+            <button type="button" id="themeButton" class="theme-button" aria-label="Switch color theme">
+              <span class="theme-button-label">Dark</span>
+            </button>
+            <details class="language-menu">
+              <summary aria-label="Choose language" title="Choose language">
+                <img src="./language.svg" alt="" aria-hidden="true" />
+              </summary>
+              <div class="language-menu-options" role="group" aria-label="Choose language">
+                <button type="button" data-language="en">English</button>
+                <button type="button" data-language="ru">Русский</button>
+              </div>
+            </details>
+          </div>
         </header>
 
         <form id="controls" class="controls">
           <section class="control-section">
             <div class="field-grid map-fields">
               <label class="field field-coordinate">
-                <span>Longitude</span>
+                <span data-i18n="longitude">Longitude</span>
                 <input id="lngInput" name="lng" type="number" step="0.0001" />
               </label>
               <label class="field field-coordinate">
-                <span>Latitude</span>
+                <span data-i18n="latitude">Latitude</span>
                 <input id="latInput" name="lat" type="number" step="0.0001" />
               </label>
               <label class="field field-zoom">
-                <span>Zoom</span>
+                <span data-i18n="zoom">Zoom</span>
                 <input id="zoomInput" name="zoom" type="number" step="0.5" min="0" max="24" />
               </label>
               <label class="field field-rotation">
-                <span>Rotation</span>
+                <span data-i18n="rotation">Rotation</span>
                 <span class="unit-input">
                   <input id="bearingInput" name="bearing" type="number" step="1" />
                   <span class="unit-input-suffix">°</span>
                 </span>
               </label>
               <label class="field field-png-size">
-                <span>PNG size</span>
+                <span data-i18n="pngSize">PNG size</span>
                 <span class="unit-input">
                   <input id="sizeInput" name="size" type="number" min="128" max="8192" step="10" />
                   <span class="unit-input-suffix">px</span>
@@ -59,21 +70,21 @@
           </section>
 
           <div class="output-group">
-            <section class="name-controls" aria-label="PNG name suggestion">
-              <span class="name-controls-title">Suggested name</span>
+            <section class="name-controls" aria-label="PNG name suggestion" data-i18n-aria-label="pngNameSuggestion">
+              <span class="name-controls-title" data-i18n="suggestedName">Suggested name</span>
               <div class="name-controls-row">
-                <label class="name-toggle" title="Use the selected nearby place in the PNG filename">
+                <label class="name-toggle" title="Use the selected nearby place in the PNG filename" data-i18n-title="useSuggestedNameTitle">
                   <input id="nameToggle" type="checkbox" role="switch" checked />
                   <span class="toggle-track" aria-hidden="true"><span></span></span>
-                  <span class="sr-only">Use suggested PNG name</span>
+                  <span class="sr-only" data-i18n="useSuggestedName">Use suggested PNG name</span>
                 </label>
                 <label class="name-select-label" id="nameSelectLabel">
-                  <span class="sr-only">Nearby place name</span>
-                  <select id="nameSelect" aria-label="Nearby place name">
-                    <option value="">Finding nearby names...</option>
+                  <span class="sr-only" data-i18n="nearbyPlaceName">Nearby place name</span>
+                  <select id="nameSelect" aria-label="Nearby place name" data-i18n-aria-label="nearbyPlaceName">
+                    <option value="" data-i18n-suggestion-message="findingNearbyNames">Finding nearby names...</option>
                   </select>
-                  <input id="nameInput" aria-label="Custom PNG name" hidden />
-                  <span class="name-loading-spinner" aria-label="Finding nearby names" role="status"></span>
+                  <input id="nameInput" aria-label="Custom PNG name" data-i18n-aria-label="customPngName" hidden />
+                  <span class="name-loading-spinner" aria-label="Finding nearby names" data-i18n-aria-label="findingNearbyNames" role="status"></span>
                 </label>
                 <button
                   type="button"
@@ -119,7 +130,7 @@
             <div id="mapStage" class="map-stage">
               <div id="map" class="map-canvas"></div>
             </div>
-            <div class="canvas-size-controls" aria-label="Canvas size">
+            <div class="canvas-size-controls" aria-label="Canvas size" data-i18n-aria-label="canvasSize">
               <button
                 type="button"
                 id="expandCanvasButton"
