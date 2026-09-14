@@ -48,10 +48,10 @@ const elements = {
 
 const state = {
   center: [37.630847, 55.766782],
-  zoom: 15.61,
+  zoom: 15.5,
   bearing: 0,
   canvasSize: DEFAULT_CANVAS_SIZE,
-  outputSize: 3840,
+  outputSize: 4000,
 };
 
 let map;
@@ -378,7 +378,7 @@ function changeCanvasSize(direction) {
 
 function applyOutputSizeFromInput() {
   state.outputSize = clamp(
-    Math.round(Number(elements.sizeInput.value)) || 3840,
+    Math.round(Number(elements.sizeInput.value)) || 4000,
     128,
     8192,
   );
