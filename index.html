@@ -134,24 +134,45 @@
               <button
                 type="button"
                 id="expandCanvasButton"
-                class="canvas-size-button"
-                aria-label="Expand canvas to show more area"
-                title="Expand canvas by 20%"
+                class="canvas-size-end-button"
+                aria-label="Expand canvas by one step"
               >
                 <img
+                  class="canvas-size-end-icon"
                   src="./arrow.up.left.and.arrow.down.right.svg"
                   alt=""
                   aria-hidden="true"
                 />
               </button>
+              <label class="canvas-size-slider-label">
+                <span class="sr-only" data-i18n="canvasSize">Canvas size</span>
+                <span class="canvas-size-track" aria-hidden="true">
+                  <span class="canvas-size-fill"></span>
+                </span>
+                <input
+                  id="canvasSizeSlider"
+                  class="canvas-size-slider"
+                  type="range"
+                  min="0"
+                  max="23"
+                  step="1"
+                  value="12"
+                  aria-valuetext="960 pixels"
+                />
+                <span id="canvasSizeDefaultOffset" class="canvas-size-default-offset" aria-hidden="true">
+                  <span id="canvasSizeDefaultOffsetSign" class="canvas-size-default-offset-sign"></span>
+                  <span id="canvasSizeDefaultOffsetValue">0</span>
+                </span>
+              </label>
+              <span class="canvas-size-default-dot" aria-hidden="true"></span>
               <button
                 type="button"
                 id="contractCanvasButton"
-                class="canvas-size-button"
-                aria-label="Contract canvas to show less area"
-                title="Contract canvas by one 20% step"
+                class="canvas-size-end-button"
+                aria-label="Contract canvas by one step"
               >
                 <img
+                  class="canvas-size-end-icon"
                   src="./arrow.down.right.and.arrow.up.left.svg"
                   alt=""
                   aria-hidden="true"

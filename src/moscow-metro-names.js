@@ -317,6 +317,40 @@ const englishNameByStationKey = new Map(
 );
 
 export function getMoscowMetroEnglishName(name) {
-  return englishNameByStationKey.get(stationNameKey(name));
-}
+  const value = String(name ?? "");
+  if (!/[А-Яа-яЁё]/u.test(value)) {
+    return value.replace(/(^|[\s-])(\p{Ll})/gu, (_, separator, letter) =>
+      `${separator}${letter.toLocaleUpperCase("en-US")}`,
+    ) || undefined;
+  }
 
+  const letters = {
+    а: "a", б: "b", в: "v", г: "g", д: "d", е: "e", ё: "e", ж: "zh", з: "z",
+    и: "i", й: "y", к: "k", л: "l", м: "m", н: "n", о: "o", п: "p", р: "r",
+    с: "s", т: "t", у: "u", ф: "f", х: "kh", ц: "ts", ч: "ch", ш: "sh", щ: "sch",
+    ы: "y", э: "e", ю: "yu", я: "ya",
+  };
+  let result = "";
+  let previousWasSoftSign = false;
+
+  for (const character of value.toLocaleLowerCase("ru-RU").replace(/ый/g, "\u0000")) {
+    if (character === "ь" || character === "ъ") {
+      previousWasSoftSign = true;
+      continue;
+    }
+    if (character === "\u0000") {
+      result += "y";
+    } else if (previousWasSoftSign && character === "е") {
+      result += "ye";
+    } else if (previousWasSoftSign && character === "и") {
+      result += "yi";
+    } else {
+      result += letters[character] ?? character;
+    }
+    previousWasSoftSign = false;
+  }
+
+  return result.replace(/(^|[\s-])(\p{Ll})/gu, (_, separator, letter) =>
+    `${separator}${letter.toLocaleUpperCase("en-US")}`,
+  );
+}

@@ -1,5 +1,7 @@
-import mapboxgl from "mapbox-gl";
+import * as mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
+import MapboxGeocoder from "@mapbox/mapbox-gl-geocoder";
+import "@mapbox/mapbox-gl-geocoder/dist/mapbox-gl-geocoder.css";
 
 import {
   MAX_CANVAS_SIZE,
@@ -7,13 +9,13 @@ import {
   createExportPlan,
   createPatternExportPlan,
   scaleStyleForExport,
-  stepCanvasSize,
 } from "./export-model.js";
 import {
   createDownloadFilename,
   createNameSuggestions,
   slugifySuggestedName,
 } from "./name-suggestions.js";
+import { getMoscowMetroEnglishName } from "./moscow-metro-names.js";
 import { DEFAULT_LANGUAGE, translate } from "./translations.js";
 import "./styles.css";
 
@@ -21,6 +23,15 @@ const STYLE_URL = "mapbox://styles/veave/clxnace1t003701r00j380e5e";
 const ACCESS_TOKEN = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN;
 const DEFAULT_CANVAS_SIZE = 960;
 const EXPORT_TIMEOUT_MS = 30_000;
+const MAP_TILE_SIZE = 512;
+const MAX_MERCATOR_LATITUDE = 85.051129;
+const ZOOM_STEP = 0.5;
+const CANVAS_SIZE_STEP = 1.2;
+const CAMERA_STORAGE_KEY = "mapbox-screenshotter-camera";
+const MOSCOW_REGION_BOUNDS = [35.147, 54.256, 40.25, 56.99];
+const MOSCOW_SEARCH_TYPES = "poi,district,place,locality,neighborhood,address";
+const GEOCODER_COUNTRY_NAMES = new Set(["Россия", "Russia"]);
+const OVERPASS_API_URL = "https://overpass-api.de/api/interpreter";
 
 const elements = {
   lngInput: document.querySelector("#lngInput"),
@@ -40,6 +51,11 @@ const elements = {
   themeButtonLabel: document.querySelector(".theme-button-label"),
   languageMenu: document.querySelector(".language-menu"),
   languageButtons: document.querySelectorAll("[data-language]"),
+  canvasSizeControls: document.querySelector(".canvas-size-controls"),
+  canvasSizeSlider: document.querySelector("#canvasSizeSlider"),
+  canvasSizeDefaultOffset: document.querySelector("#canvasSizeDefaultOffset"),
+  canvasSizeDefaultOffsetSign: document.querySelector("#canvasSizeDefaultOffsetSign"),
+  canvasSizeDefaultOffsetValue: document.querySelector("#canvasSizeDefaultOffsetValue"),
   expandCanvasButton: document.querySelector("#expandCanvasButton"),
   contractCanvasButton: document.querySelector("#contractCanvasButton"),
   nameToggle: document.querySelector("#nameToggle"),
@@ -59,14 +75,164 @@ const state = {
 };
 
 let map;
+let geocoder;
+let mapMinimumZoom = 0;
 let spriteSheetPromise;
 let previewResizeFrame;
 let nameSearchController;
 let nameSearchTimer;
 let hasCustomName = false;
+let moscowMetroSearchFeatures = [];
+let hasAdjustedCanvasSize = false;
+let pendingCanvasSize;
+let canvasSizeApplyTimer;
+
+const canvasSizeLevels = createCanvasSizeLevels();
+
+function createCanvasSizeLevels() {
+  const smallerSizes = [];
+  let smallerSize = DEFAULT_CANVAS_SIZE;
+  while (smallerSize > MIN_CANVAS_SIZE) {
+    smallerSize = Math.max(MIN_CANVAS_SIZE, Math.round(smallerSize / CANVAS_SIZE_STEP));
+    smallerSizes.push(smallerSize);
+  }
+
+  const largerSizes = [];
+  let largerSize = DEFAULT_CANVAS_SIZE;
+  while (largerSize < MAX_CANVAS_SIZE) {
+    largerSize = Math.min(MAX_CANVAS_SIZE, Math.round(largerSize * CANVAS_SIZE_STEP));
+    largerSizes.push(largerSize);
+  }
+
+  return [...smallerSizes.reverse(), DEFAULT_CANVAS_SIZE, ...largerSizes].slice(4, -3);
+}
+
+function getCanvasSizeLevel(size) {
+  return canvasSizeLevels.reduce((closestLevel, levelSize, level) =>
+    Math.abs(levelSize - size) < Math.abs(canvasSizeLevels[closestLevel] - size)
+      ? level
+      : closestLevel, 0);
+}
 
 function t(key, values) {
   return translate(state.language, key, values);
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function getGeocoderResultName(feature) {
+  return typeof feature?.text === "string" && feature.text
+    ? feature.text
+    : feature?.place_name || "";
+}
+
+function renderGeocoderResult(feature) {
+  const name = getGeocoderResultName(feature);
+  const context = typeof feature?.place_name === "string"
+    ? feature.place_name
+      .split(",")
+      .map((segment) => segment.trim())
+      .filter((segment) => !GEOCODER_COUNTRY_NAMES.has(segment) && segment !== name)
+      .join(", ")
+    : "";
+  const title = `<div class="mapboxgl-ctrl-geocoder--suggestion-title">${escapeHtml(name)}</div>`;
+  const address = context
+    ? `<div class="mapboxgl-ctrl-geocoder--suggestion-address">${escapeHtml(context)}</div>`
+    : "";
+
+  return `<div class="mapboxgl-ctrl-geocoder--suggestion">${title}${address}</div>`;
+}
+
+function normalizedSearchText(value) {
+  return String(value ?? "")
+    .normalize("NFKC")
+    .toLocaleLowerCase("ru-RU")
+    .replace(/ё/g, "е")
+    .trim();
+}
+
+function createOsmMetroSearchFeature(element) {
+  const name = element?.tags?.name;
+  const englishName = element?.tags?.["name:en"] ?? getMoscowMetroEnglishName(name);
+  const longitude = element?.lon ?? element?.center?.lon;
+  const latitude = element?.lat ?? element?.center?.lat;
+
+  if (!name || !Number.isFinite(longitude) || !Number.isFinite(latitude)) return undefined;
+
+  return {
+    type: "Feature",
+    geometry: { type: "Point", coordinates: [longitude, latitude] },
+    center: [longitude, latitude],
+    text: name,
+    searchText: `${name} ${englishName ?? ""}`,
+    place_name: `${name}, метро, Москва`,
+    place_type: ["poi"],
+    properties: {
+      mapbox_id: `osm-${element.type}-${element.id}`,
+      poi_category_ids: ["metro_station"],
+      name,
+    },
+    _source: "openstreetmap",
+  };
+}
+
+function findMoscowMetroStations(query) {
+  const searchText = normalizedSearchText(query);
+  if (searchText.length < 2) return [];
+
+  const stations = moscowMetroSearchFeatures;
+  const seenStationIds = new Set();
+
+  return stations.filter((feature) => {
+    const id = feature.properties.mapbox_id;
+    if (
+      seenStationIds.has(id) ||
+      !normalizedSearchText(feature.searchText ?? feature.text).includes(searchText)
+    ) {
+      return false;
+    }
+    seenStationIds.add(id);
+    return true;
+  });
+}
+
+function isAtCurrentMoscowMetroStation(feature) {
+  const [longitude, latitude] = feature?.geometry?.coordinates ?? [];
+  if (!Number.isFinite(longitude) || !Number.isFinite(latitude)) return false;
+
+  return moscowMetroSearchFeatures.some((station) => {
+    const [stationLongitude, stationLatitude] = station.geometry.coordinates;
+    const longitudeDistance = (longitude - stationLongitude) * Math.cos(latitude * Math.PI / 180);
+    return Math.hypot(longitudeDistance, latitude - stationLatitude) < 0.003;
+  });
+}
+
+async function loadMoscowMetroSearchFeatures() {
+  try {
+    const query = `[out:json][timeout:25];(nwr["station"="subway"](54.256,35.147,56.99,40.25);nwr["subway"="yes"](54.256,35.147,56.99,40.25);nwr["railway"="station"]["network"~"Московский метрополитен|Moscow Metro"](54.256,35.147,56.99,40.25););out center tags;`;
+    const response = await fetch(OVERPASS_API_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
+      body: new URLSearchParams({ data: query }),
+    });
+    if (!response.ok) throw new Error(`OSM station search failed: ${response.status}`);
+
+    const data = await response.json();
+    moscowMetroSearchFeatures = (data.elements ?? [])
+      .map(createOsmMetroSearchFeature)
+      .filter(Boolean);
+    scheduleNameSuggestionRefresh({ preferClosest: true });
+  } catch (error) {
+    // The regular Mapbox geocoder remains available when this supplemental list fails.
+    console.error(error);
+  }
 }
 
 function translateDocument() {
@@ -84,6 +250,8 @@ function translateDocument() {
   }
 
   elements.themeButton.setAttribute("aria-label", t("switchTheme"));
+  geocoder?.setLanguage(state.language);
+  geocoder?.setPlaceholder(t("mapSearchPlaceholder"));
   elements.languageMenu.querySelector("summary").setAttribute("aria-label", t("languageMenuLabel"));
   elements.languageMenu.querySelector("summary").title = t("languageMenuLabel");
   elements.languageMenu.querySelector("[role=group]").setAttribute("aria-label", t("languageMenuLabel"));
@@ -139,6 +307,78 @@ function clamp(number, min, max) {
   return Math.min(max, Math.max(min, number));
 }
 
+function parseStoredCamera(value) {
+  const camera = JSON.parse(value);
+  if (!camera || typeof camera !== "object" || !Array.isArray(camera.center)) return null;
+
+  const [longitude, latitude] = camera.center;
+  if (
+    !Number.isFinite(longitude) ||
+    !Number.isFinite(latitude) ||
+    !Number.isFinite(camera.zoom) ||
+    !Number.isFinite(camera.bearing) ||
+    longitude < -180 || longitude > 180 ||
+    latitude < -MAX_MERCATOR_LATITUDE || latitude > MAX_MERCATOR_LATITUDE ||
+    camera.zoom < 0 || camera.zoom > 24
+  ) {
+    return null;
+  }
+
+  return { center: [longitude, latitude], zoom: camera.zoom, bearing: camera.bearing };
+}
+
+function restoreStoredCamera() {
+  try {
+    const camera = parseStoredCamera(localStorage.getItem(CAMERA_STORAGE_KEY));
+    if (camera) Object.assign(state, camera);
+  } catch {
+    // The default camera remains in use when storage is unavailable or invalid.
+  }
+}
+
+function saveCamera() {
+  try {
+    localStorage.setItem(CAMERA_STORAGE_KEY, JSON.stringify({
+      center: state.center,
+      zoom: state.zoom,
+      bearing: state.bearing,
+    }));
+  } catch {
+    // The current camera still works when browser storage is unavailable.
+  }
+}
+
+function getMinimumZoomForCenter() {
+  if (!map) return 0;
+
+  const latitude = clamp(
+    state.center[1],
+    -MAX_MERCATOR_LATITUDE,
+    MAX_MERCATOR_LATITUDE,
+  );
+  const latitudeRadians = latitude * Math.PI / 180;
+  const mercatorY = (1 - Math.log(
+    Math.tan(latitudeRadians) + 1 / Math.cos(latitudeRadians),
+  ) / Math.PI) / 2;
+  const nearestWorldEdge = Math.min(mercatorY, 1 - mercatorY);
+  const minimumWorldSize = map.getContainer().clientHeight / (2 * nearestWorldEdge);
+  const minimumZoom = Math.log2(minimumWorldSize / MAP_TILE_SIZE);
+
+  return clamp(Math.ceil(minimumZoom / ZOOM_STEP) * ZOOM_STEP, 0, 24);
+}
+
+function updateMinimumZoom() {
+  const minimumZoom = getMinimumZoomForCenter();
+  elements.zoomInput.min = String(minimumZoom);
+
+  if (minimumZoom !== mapMinimumZoom) {
+    mapMinimumZoom = minimumZoom;
+    map.setMinZoom(minimumZoom);
+  }
+
+  return minimumZoom;
+}
+
 function getExportPlan() {
   return createExportPlan({
     canvasSize: state.canvasSize,
@@ -172,12 +412,14 @@ function syncDerivedExportState() {
 function updatePreviewScale() {
   const scrollRect = elements.stageScroll.getBoundingClientRect();
   const shellRect = elements.previewShell.getBoundingClientRect();
-  const controlGutter = window.matchMedia("(max-width: 520px)").matches ? 0 : 64;
+  const verticalControlGutter = window.matchMedia("(max-width: 520px)").matches ? 80 : 88;
   const fallbackSide = Math.max(1, Math.min(shellRect.width - 32, 960));
   const availableWidth = scrollRect.width > 0
-    ? scrollRect.width - 32 - controlGutter
-    : fallbackSide - controlGutter;
-  const availableHeight = scrollRect.height > 0 ? scrollRect.height - 32 : fallbackSide;
+    ? scrollRect.width - 32
+    : fallbackSide;
+  const availableHeight = scrollRect.height > 0
+    ? scrollRect.height - verticalControlGutter
+    : fallbackSide - verticalControlGutter + 32;
   const availableSide = Math.max(1, Math.min(availableWidth, availableHeight));
   const displaySize = Math.max(1, Math.round(availableSide));
   const scale = displaySize / state.canvasSize;
@@ -199,6 +441,40 @@ function schedulePreviewResize() {
   });
 }
 
+function updateCanvasSizeControl(size) {
+  const canvasSize = clamp(
+    Math.round(size) || DEFAULT_CANVAS_SIZE,
+    MIN_CANVAS_SIZE,
+    MAX_CANVAS_SIZE,
+  );
+  const canvasSizeLevel = getCanvasSizeLevel(canvasSize);
+  const defaultCanvasSizeLevel = getCanvasSizeLevel(DEFAULT_CANVAS_SIZE);
+  elements.canvasSizeSlider.max = String(canvasSizeLevels.length - 1);
+  elements.canvasSizeSlider.value = String(canvasSizeLevel);
+  elements.canvasSizeControls.style.setProperty(
+    "--canvas-size-progress",
+    String(canvasSizeLevel / (canvasSizeLevels.length - 1)),
+  );
+  const canvasSizeOffset = canvasSizeLevel - defaultCanvasSizeLevel;
+  elements.canvasSizeDefaultOffsetSign.textContent = canvasSizeOffset > 0 ? "+" : canvasSizeOffset < 0 ? "−" : "";
+  elements.canvasSizeDefaultOffsetValue.textContent = String(Math.abs(canvasSizeOffset));
+  elements.canvasSizeDefaultOffset.classList.toggle("is-visible", hasAdjustedCanvasSize);
+  elements.canvasSizeControls.dataset.canvasSizeAtDefault = String(canvasSizeOffset === 0);
+  elements.canvasSizeControls.dataset.canvasSizeOffset = String(canvasSizeOffset);
+  elements.canvasSizeControls.style.setProperty(
+    "--canvas-size-steps",
+    String(canvasSizeLevels.length - 1),
+  );
+  elements.expandCanvasButton.disabled = canvasSizeLevel === canvasSizeLevels.length - 1;
+  elements.contractCanvasButton.disabled = canvasSizeLevel === 0;
+  elements.expandCanvasButton.setAttribute("aria-label", t("expandCanvasTitle"));
+  elements.contractCanvasButton.setAttribute("aria-label", t("contractCanvasTitle"));
+  elements.canvasSizeSlider.setAttribute(
+    "aria-valuetext",
+    t("canvasSizeValue", { size: canvasSize }),
+  );
+}
+
 function setCanvasSize(size) {
   state.canvasSize = clamp(
     Math.round(size) || DEFAULT_CANVAS_SIZE,
@@ -207,18 +483,7 @@ function setCanvasSize(size) {
   );
   elements.mapStage.style.width = `${state.canvasSize}px`;
   elements.mapStage.style.height = `${state.canvasSize}px`;
-  elements.expandCanvasButton.disabled = state.canvasSize >= MAX_CANVAS_SIZE;
-  elements.contractCanvasButton.disabled = state.canvasSize <= MIN_CANVAS_SIZE;
-  elements.expandCanvasButton.setAttribute(
-    "aria-label",
-    t("expandCanvas", { size: state.canvasSize }),
-  );
-  elements.contractCanvasButton.setAttribute(
-    "aria-label",
-    t("contractCanvas", { size: state.canvasSize }),
-  );
-  elements.expandCanvasButton.title = t("expandCanvasTitle");
-  elements.contractCanvasButton.title = t("contractCanvasTitle");
+  updateCanvasSizeControl(state.canvasSize);
   updatePreviewScale();
   syncDerivedExportState();
 }
@@ -244,7 +509,9 @@ function syncStateFromMap() {
   state.center = [center.lng, center.lat];
   state.zoom = map.getZoom();
   state.bearing = map.getBearing();
+  updateMinimumZoom();
   reflectCameraInputs({ preserveFocused: true });
+  saveCamera();
   return state.center.some((coordinate, index) =>
     Math.abs(coordinate - previousCenter[index]) > 0.0000001
   );
@@ -352,12 +619,7 @@ async function refreshNameSuggestions({ preferClosest = false } = {}) {
   elements.nameSelectLabel.dataset.loading = "true";
 
   try {
-    const [metroData, railData, airportData, districtData] = await Promise.all([
-      fetchJson(searchUrl("/search/searchbox/v1/category/light_rail_station", {
-        language: "en",
-        limit: 10,
-        proximity,
-      }), signal),
+    const [railData, airportData, districtData] = await Promise.all([
       fetchJson(searchUrl("/search/searchbox/v1/category/railway_station", {
         language: "en",
         limit: 25,
@@ -379,12 +641,16 @@ async function refreshNameSuggestions({ preferClosest = false } = {}) {
     ]);
 
     if (signal.aborted) return;
-    renderNameSuggestions(createNameSuggestions({
-      railFeatures: [...metroData.features, ...railData.features],
+    const suggestions = createNameSuggestions({
+      railFeatures: [
+        ...moscowMetroSearchFeatures,
+        ...railData.features.filter((feature) => !isAtCurrentMoscowMetroStation(feature)),
+      ],
       airportFeatures: airportData.features,
       districtFeatures: districtData.features,
       origin: state.center,
-    }), selectedName, preferClosest);
+    });
+    renderNameSuggestions(suggestions, selectedName, preferClosest);
   } catch (error) {
     if (error.name === "AbortError") return;
     console.error(error);
@@ -402,19 +668,24 @@ function scheduleNameSuggestionRefresh({ preferClosest = false } = {}) {
   );
 }
 
-function applyCameraFromInputs({ normalize = true } = {}) {
+function applyCameraFromInput(input, { normalize = true } = {}) {
   const previousCenter = state.center;
-  const longitude = elements.lngInput.valueAsNumber;
-  const latitude = elements.latInput.valueAsNumber;
-  const zoom = elements.zoomInput.valueAsNumber;
-  const bearing = elements.bearingInput.valueAsNumber;
 
-  state.center = [
-    Number.isFinite(longitude) ? longitude : state.center[0],
-    Number.isFinite(latitude) ? latitude : state.center[1],
-  ];
-  state.zoom = Number.isFinite(zoom) ? clamp(zoom, 0, 24) : state.zoom;
-  state.bearing = Number.isFinite(bearing) ? bearing : normalize ? 0 : state.bearing;
+  if (input === elements.lngInput) {
+    const longitude = input.valueAsNumber;
+    if (Number.isFinite(longitude)) state.center = [longitude, state.center[1]];
+  } else if (input === elements.latInput) {
+    const latitude = input.valueAsNumber;
+    if (Number.isFinite(latitude)) state.center = [state.center[0], latitude];
+  } else if (input === elements.zoomInput) {
+    const zoom = input.valueAsNumber;
+    if (Number.isFinite(zoom)) state.zoom = clamp(zoom, 0, 24);
+  } else if (input === elements.bearingInput) {
+    const bearing = input.valueAsNumber;
+    state.bearing = Number.isFinite(bearing) ? bearing : normalize ? 0 : state.bearing;
+  }
+
+  state.zoom = Math.max(state.zoom, updateMinimumZoom());
   if (normalize) reflectCameraInputs();
   map.jumpTo({ center: state.center, zoom: state.zoom, bearing: state.bearing, pitch: 0 });
   const centerChanged = state.center.some((coordinate, index) =>
@@ -423,11 +694,23 @@ function applyCameraFromInputs({ normalize = true } = {}) {
   if (centerChanged) scheduleNameSuggestionRefresh({ preferClosest: true });
 }
 
-function changeCanvasSize(direction) {
-  const nextSize = stepCanvasSize(state.canvasSize, direction);
-  if (nextSize === state.canvasSize) {
-    return;
-  }
+function applyCanvasSizeFromSlider() {
+  hasAdjustedCanvasSize = true;
+  elements.canvasSizeControls.classList.add("is-adjusting");
+  elements.canvasSizeDefaultOffset.classList.add("is-visible");
+  const level = clamp(Math.round(Number(elements.canvasSizeSlider.value)), 0, canvasSizeLevels.length - 1);
+  const nextSize = canvasSizeLevels[level];
+  updateCanvasSizeControl(nextSize);
+  pendingCanvasSize = nextSize;
+  window.clearTimeout(canvasSizeApplyTimer);
+  canvasSizeApplyTimer = window.setTimeout(applyPendingCanvasSize, 80);
+}
+
+function applyPendingCanvasSize() {
+  canvasSizeApplyTimer = undefined;
+  const nextSize = pendingCanvasSize;
+  pendingCanvasSize = undefined;
+  if (!nextSize || nextSize === state.canvasSize) return;
 
   const camera = {
     center: map.getCenter(),
@@ -437,9 +720,40 @@ function changeCanvasSize(direction) {
   };
 
   setCanvasSize(nextSize);
+  camera.zoom = Math.max(camera.zoom, updateMinimumZoom());
   map.resize();
   map.jumpTo(camera);
   syncStateFromMap();
+}
+
+function finishCanvasSizeAdjustment() {
+  elements.canvasSizeControls.classList.remove("is-adjusting");
+  const selectedLevel = clamp(
+    Math.round(Number(elements.canvasSizeSlider.value)),
+    0,
+    canvasSizeLevels.length - 1,
+  );
+  if (selectedLevel !== getCanvasSizeLevel(DEFAULT_CANVAS_SIZE)) {
+    return;
+  }
+
+  hasAdjustedCanvasSize = false;
+  elements.canvasSizeDefaultOffset.classList.remove("is-visible");
+}
+
+function nudgeCanvasSize(direction) {
+  const currentLevel = clamp(
+    Math.round(Number(elements.canvasSizeSlider.value)),
+    0,
+    canvasSizeLevels.length - 1,
+  );
+  elements.canvasSizeSlider.value = String(clamp(
+    currentLevel + direction,
+    0,
+    canvasSizeLevels.length - 1,
+  ));
+  applyCanvasSizeFromSlider();
+  finishCanvasSizeAdjustment();
 }
 
 function applyOutputSizeFromInput() {
@@ -463,7 +777,7 @@ function nudgeBearing(direction) {
     ? elements.bearingInput.valueAsNumber
     : state.bearing;
   elements.bearingInput.value = String(currentBearing + direction * 5);
-  applyCameraFromInputs({ normalize: false });
+  applyCameraFromInput(elements.bearingInput, { normalize: false });
 }
 
 function nudgeCoordinate(input, stateIndex, direction) {
@@ -471,7 +785,7 @@ function nudgeCoordinate(input, stateIndex, direction) {
     ? input.valueAsNumber
     : state.center[stateIndex];
   input.value = (currentCoordinate + direction * 0.001).toFixed(4);
-  applyCameraFromInputs({ normalize: false });
+  applyCameraFromInput(input, { normalize: false });
 }
 
 function registerBlurCommit(input, handler) {
@@ -657,6 +971,7 @@ async function renderExportBlob() {
   const scaledStyle = scaleStyleForExport(sourceStyle, plan.styleScale);
   const exportMap = new mapboxgl.Map({
     container,
+    accessToken: ACCESS_TOKEN,
     style: scaledStyle,
     center: state.center,
     zoom: state.zoom + plan.zoomDelta,
@@ -758,8 +1073,8 @@ try {
 } catch {
   // English remains the default when storage is unavailable.
 }
+restoreStoredCamera();
 
-mapboxgl.accessToken = ACCESS_TOKEN;
 translateDocument();
 
 for (const button of elements.languageButtons) {
@@ -768,6 +1083,7 @@ for (const button of elements.languageButtons) {
 
 map = new mapboxgl.Map({
   container: elements.mapContainer,
+  accessToken: ACCESS_TOKEN,
   style: STYLE_URL,
   center: state.center,
   zoom: state.zoom,
@@ -779,6 +1095,34 @@ map = new mapboxgl.Map({
 });
 
 map.addControl(new mapboxgl.NavigationControl({ showCompass: true, showZoom: true }), "top-right");
+geocoder = new MapboxGeocoder({
+  accessToken: ACCESS_TOKEN,
+  mapboxgl,
+  marker: false,
+  flyTo: false,
+  bbox: MOSCOW_REGION_BOUNDS,
+  countries: "ru",
+  types: MOSCOW_SEARCH_TYPES,
+  language: state.language,
+  placeholder: t("mapSearchPlaceholder"),
+  clearAndBlurOnEsc: true,
+  getItemValue: getGeocoderResultName,
+  localGeocoder: findMoscowMetroStations,
+  render: renderGeocoderResult,
+});
+geocoder.on("result", ({ result }) => {
+  const [longitude, latitude] = Array.isArray(result?.center) ? result.center : [];
+  if (!Number.isFinite(longitude) || !Number.isFinite(latitude)) return;
+
+  map.flyTo({
+    center: [longitude, latitude],
+    zoom: map.getZoom(),
+    bearing: map.getBearing(),
+    essential: true,
+  });
+});
+map.addControl(geocoder, "top-left");
+void loadMoscowMetroSearchFeatures();
 map.on("load", () => {
   updatePreviewScale();
   map.resize();
@@ -796,10 +1140,10 @@ map.on("error", (event) => {
   }
 });
 
-registerBlurCommit(elements.lngInput, applyCameraFromInputs);
-registerBlurCommit(elements.latInput, applyCameraFromInputs);
-registerBlurCommit(elements.zoomInput, applyCameraFromInputs);
-registerBlurCommit(elements.bearingInput, applyCameraFromInputs);
+registerBlurCommit(elements.lngInput, () => applyCameraFromInput(elements.lngInput));
+registerBlurCommit(elements.latInput, () => applyCameraFromInput(elements.latInput));
+registerBlurCommit(elements.zoomInput, () => applyCameraFromInput(elements.zoomInput));
+registerBlurCommit(elements.bearingInput, () => applyCameraFromInput(elements.bearingInput));
 registerBlurCommit(elements.sizeInput, applyOutputSizeFromInput);
 
 for (const input of [
@@ -808,7 +1152,7 @@ for (const input of [
   elements.zoomInput,
   elements.bearingInput,
 ]) {
-  input.addEventListener("input", () => applyCameraFromInputs({ normalize: false }));
+  input.addEventListener("input", () => applyCameraFromInput(input, { normalize: false }));
 }
 
 elements.bearingInput.addEventListener("keydown", (event) => {
@@ -851,8 +1195,10 @@ elements.copyButton.addEventListener("click", () => {
   copyPng().catch(console.error);
 });
 elements.themeButton.addEventListener("click", toggleTheme);
-elements.expandCanvasButton.addEventListener("click", () => changeCanvasSize("expand"));
-elements.contractCanvasButton.addEventListener("click", () => changeCanvasSize("contract"));
+elements.canvasSizeSlider.addEventListener("input", applyCanvasSizeFromSlider);
+elements.canvasSizeSlider.addEventListener("change", finishCanvasSizeAdjustment);
+elements.expandCanvasButton.addEventListener("click", () => nudgeCanvasSize(1));
+elements.contractCanvasButton.addEventListener("click", () => nudgeCanvasSize(-1));
 elements.nameToggle.addEventListener("change", () => {
   syncNameControls();
 });

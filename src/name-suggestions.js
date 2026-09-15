@@ -109,9 +109,9 @@ function isMetroFeature(feature) {
   ) || maki === "rail-light" || maki === "rail-metro";
 }
 
-function makeSuggestion(feature, group, origin) {
+function makeSuggestion(feature, group, origin, { isMetro = false } = {}) {
   const rawName = cleanSuggestedName(featureName(feature));
-  const englishName = group === "Metro"
+  const englishName = isMetro
     ? getMoscowMetroEnglishName(rawName)
     : undefined;
   const name = slugifySuggestedName(englishName ?? rawName);
@@ -128,6 +128,7 @@ function makeSuggestion(feature, group, origin) {
 function deduplicate(suggestions) {
   const usedNames = new Set();
   return suggestions.filter((suggestion) => {
+    if (!suggestion) return false;
     const key = suggestion.name.toLocaleLowerCase();
     if (usedNames.has(key)) return false;
     usedNames.add(key);
@@ -144,12 +145,12 @@ function nearestInGroup(suggestions) {
 }
 
 export function createNameSuggestions({ railFeatures = [], airportFeatures = [], districtFeatures = [], origin }) {
-  const metros = railFeatures
+  const transport = railFeatures
     .filter(isMetroFeature)
-    .map((feature) => makeSuggestion(feature, "Metro", origin));
-  const railways = railFeatures
-    .filter((feature) => !isMetroFeature(feature))
-    .map((feature) => makeSuggestion(feature, "Railway", origin));
+    .map((feature) => makeSuggestion(feature, "Transport", origin, { isMetro: true }))
+    .concat(railFeatures
+      .filter((feature) => !isMetroFeature(feature))
+      .map((feature) => makeSuggestion(feature, "Transport", origin)));
   const airports = airportFeatures
     .map((feature) => makeSuggestion(feature, "Airport", origin))
     .filter((suggestion) => suggestion?.distance <= AIRPORT_MAX_DISTANCE_METERS);
@@ -157,7 +158,7 @@ export function createNameSuggestions({ railFeatures = [], airportFeatures = [],
     .map((feature) => makeSuggestion(feature, "District", origin));
 
   return deduplicate(
-    [metros, railways, airports, districts].flatMap(nearestInGroup),
+    [deduplicate(transport), airports, districts].flatMap(nearestInGroup),
   );
 }
 

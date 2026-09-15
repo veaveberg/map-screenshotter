@@ -168,7 +168,7 @@ assert.equal(cleanSuggestedName("Yaroslavskiy Railway Terminal"), "Yaroslavskiy"
 assert.equal(cleanSuggestedName("Kurskiy Vokzal"), "Kurskiy");
 assert.equal(cleanSuggestedName("Meshchanskiy District"), "Meshchanskiy");
 assert.equal(cleanSuggestedName("O'Hare Airport"), "O'Hare");
-assert.equal(getMoscowMetroEnglishName("Савеловская"), "Savyolovskaya");
+assert.equal(getMoscowMetroEnglishName("Савеловская"), "Savelovskaya");
 assert.equal(getMoscowMetroEnglishName("Chistye prudy"), "Chistye Prudy");
 assert.ok(Math.abs(distanceInMeters([0, 0], [0, 1]) - 111_195) < 2);
 
@@ -217,8 +217,8 @@ const nearbyNames = createNameSuggestions({
 });
 
 assert.deepEqual(nearbyNames.map(({ group, name }) => ({ group, name })), [
-  { group: "Metro", name: "babushkinskaya" },
-  { group: "Railway", name: "rizhsky" },
+  { group: "Transport", name: "babushkinskaya" },
+  { group: "Transport", name: "rizhsky" },
   { group: "Airport", name: "city" },
   { group: "District", name: "meshchanskiy" },
 ]);
