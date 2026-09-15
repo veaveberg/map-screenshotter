@@ -217,8 +217,8 @@ const nearbyNames = createNameSuggestions({
 });
 
 assert.deepEqual(nearbyNames.map(({ group, name }) => ({ group, name })), [
-  { group: "Transport", name: "babushkinskaya" },
-  { group: "Transport", name: "rizhsky" },
+  { group: "Metro", name: "babushkinskaya" },
+  { group: "Railway", name: "rizhsky" },
   { group: "Airport", name: "city" },
   { group: "District", name: "meshchanskiy" },
 ]);

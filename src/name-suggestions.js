@@ -111,9 +111,7 @@ function isMetroFeature(feature) {
 
 function makeSuggestion(feature, group, origin, { isMetro = false } = {}) {
   const rawName = cleanSuggestedName(featureName(feature));
-  const englishName = isMetro
-    ? getMoscowMetroEnglishName(rawName)
-    : undefined;
+  const englishName = getMoscowMetroEnglishName(rawName);
   const name = slugifySuggestedName(englishName ?? rawName);
   if (!name) return undefined;
 
@@ -145,21 +143,24 @@ function nearestInGroup(suggestions) {
 }
 
 export function createNameSuggestions({ railFeatures = [], airportFeatures = [], districtFeatures = [], origin }) {
-  const transport = railFeatures
+  const metros = railFeatures
     .filter(isMetroFeature)
-    .map((feature) => makeSuggestion(feature, "Transport", origin, { isMetro: true }))
-    .concat(railFeatures
-      .filter((feature) => !isMetroFeature(feature))
-      .map((feature) => makeSuggestion(feature, "Transport", origin)));
+    .map((feature) => makeSuggestion(feature, "Metro", origin, { isMetro: true }));
+  const railways = railFeatures
+    .filter((feature) => !isMetroFeature(feature))
+    .map((feature) => makeSuggestion(feature, "Railway", origin));
   const airports = airportFeatures
     .map((feature) => makeSuggestion(feature, "Airport", origin))
     .filter((suggestion) => suggestion?.distance <= AIRPORT_MAX_DISTANCE_METERS);
   const districts = districtFeatures
     .map((feature) => makeSuggestion(feature, "District", origin));
 
-  return deduplicate(
-    [deduplicate(transport), airports, districts].flatMap(nearestInGroup),
-  );
+  return [
+    deduplicate(metros),
+    deduplicate(railways),
+    deduplicate(airports),
+    deduplicate(districts),
+  ].flatMap(nearestInGroup);
 }
 
 export function slugifySuggestedName(name) {

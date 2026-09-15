@@ -15,7 +15,7 @@ import {
   createNameSuggestions,
   slugifySuggestedName,
 } from "./name-suggestions.js";
-import { getMoscowMetroEnglishName } from "./moscow-metro-names.js";
+import { getMoscowMetroEnglishName, isKnownMoscowMetroStation } from "./moscow-metro-names.js";
 import { DEFAULT_LANGUAGE, translate } from "./translations.js";
 import "./styles.css";
 
@@ -159,10 +159,14 @@ function normalizedSearchText(value) {
 }
 
 function createOsmMetroSearchFeature(element) {
-  const name = element?.tags?.name;
-  const englishName = element?.tags?.["name:en"] ?? getMoscowMetroEnglishName(name);
+  const tags = element?.tags ?? {};
+  const name = tags.name;
+  const englishName = tags["name:en"] ?? getMoscowMetroEnglishName(name);
   const longitude = element?.lon ?? element?.center?.lon;
   const latitude = element?.lat ?? element?.center?.lat;
+  const isMetro = tags.station === "subway" || tags.subway === "yes" ||
+    tags.railway === "subway" || /московский метрополитен|moscow metro/i.test(tags.network ?? "") ||
+    isKnownMoscowMetroStation(name);
 
   if (!name || !Number.isFinite(longitude) || !Number.isFinite(latitude)) return undefined;
 
@@ -176,7 +180,7 @@ function createOsmMetroSearchFeature(element) {
     place_type: ["poi"],
     properties: {
       mapbox_id: `osm-${element.type}-${element.id}`,
-      poi_category_ids: ["metro_station"],
+      poi_category_ids: [isMetro ? "metro_station" : "railway_station"],
       name,
     },
     _source: "openstreetmap",
@@ -619,7 +623,12 @@ async function refreshNameSuggestions({ preferClosest = false } = {}) {
   elements.nameSelectLabel.dataset.loading = "true";
 
   try {
-    const [railData, airportData, districtData] = await Promise.all([
+    const [metroData, railData, airportData, districtData] = await Promise.all([
+      fetchJson(searchUrl("/search/searchbox/v1/category/light_rail_station", {
+        language: "en",
+        limit: 10,
+        proximity,
+      }), signal),
       fetchJson(searchUrl("/search/searchbox/v1/category/railway_station", {
         language: "en",
         limit: 25,
@@ -644,6 +653,7 @@ async function refreshNameSuggestions({ preferClosest = false } = {}) {
     const suggestions = createNameSuggestions({
       railFeatures: [
         ...moscowMetroSearchFeatures,
+        ...metroData.features.filter((feature) => !isAtCurrentMoscowMetroStation(feature)),
         ...railData.features.filter((feature) => !isAtCurrentMoscowMetroStation(feature)),
       ],
       airportFeatures: airportData.features,
@@ -1240,3 +1250,6 @@ if (typeof ResizeObserver !== "undefined") {
 
 reflectCameraInputs();
 syncDerivedExportState();
+requestAnimationFrame(() => {
+  document.documentElement.dataset.uiReady = "true";
+});

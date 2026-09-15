@@ -4,6 +4,11 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>map screenshotter</title>
+    <style>
+      html { background: #f7f7f5; }
+      html[data-theme="dark"] { background: #191919; }
+      html:not([data-ui-ready]) .app-shell { visibility: hidden; }
+    </style>
     <script>
       try {
         const savedTheme = localStorage.getItem("mapbox-screenshotter-theme");

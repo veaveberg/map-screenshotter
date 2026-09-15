@@ -316,6 +316,14 @@ const englishNameByStationKey = new Map(
   ]),
 );
 
+const knownMoscowMetroStationKeys = new Set(
+  stationEntries.map(([russianName]) => stationNameKey(russianName)),
+);
+
+export function isKnownMoscowMetroStation(name) {
+  return knownMoscowMetroStationKeys.has(stationNameKey(name));
+}
+
 export function getMoscowMetroEnglishName(name) {
   const value = String(name ?? "");
   if (!/[А-Яа-яЁё]/u.test(value)) {
